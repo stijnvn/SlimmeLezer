@@ -1,0 +1,56 @@
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: zuidwijk/SlimmeLezer
+      BRANCH: upstream-sync
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch upstream main
+
+      - name: Open or update sync PR
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up to date with ${UPSTREAM}"
+            exit 0
+          fi
+
+          # The branch mirrors upstream/main; conflicts with our changes are resolved in the PR
+          git push --force origin "upstream/main:refs/heads/${BRANCH}"
+
+          if [ -n "$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[].number')" ]; then
+            echo "Sync PR already open; branch updated"
+            exit 0
+          fi
+
+          body="Automated sync with [${UPSTREAM}](https://github.com/${UPSTREAM}).
+
+          New upstream commits:
+          $(git log --format='- %h %s' HEAD..upstream/main)
+
+          After merging, click **Install** in ESPHome Device Builder to build and flash the updated config."
+          gh pr create --base main --head "${BRANCH}" \
+            --title "Sync with ${UPSTREAM}" --body "${body}"
